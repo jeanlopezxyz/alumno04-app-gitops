@@ -1,0 +1,68 @@
+# Un ambiente de catalogo por carpeta de apps/catalogo/overlays/ (generador Git de directorios).
+# Agregar un ambiente = agregar una carpeta. RollingSync (Beta) sincroniza dev, después qa y después prod.
+# Fuentes: https://argo-cd.readthedocs.io/en/stable/operator-manual/applicationset/Generators-Git/
+#          https://argo-cd.readthedocs.io/en/stable/operator-manual/applicationset/Progressive-Syncs/
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: catalogo
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  syncPolicy:
+    applicationsSync: create-update
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - git:
+        repoURL: https://github.com/jeanlopezxyz/alumno04-app-gitops.git
+        revision: main
+        directories:
+          - path: apps/catalogo/overlays/*
+  strategy:
+    type: RollingSync
+    rollingSync:
+      steps:
+        - matchExpressions:
+            - key: env
+              operator: In
+              values: [dev]
+        - matchExpressions:
+            - key: env
+              operator: In
+              values: [qa]
+        - matchExpressions:
+            - key: env
+              operator: In
+              values: [prod]
+  template:
+    metadata:
+      name: catalogo-{{ .path.basename }}
+      annotations:
+        notifications.argoproj.io/subscribe.on-health-degraded.receptor: ""
+        argocd.argoproj.io/manifest-generate-paths: .;../../base
+      labels:
+        env: "{{ .path.basename }}"
+        app.kubernetes.io/part-of: catalogo
+    spec:
+      project: team-api
+      source:
+        repoURL: https://github.com/jeanlopezxyz/alumno04-app-gitops.git
+        targetRevision: main
+        path: "{{ .path.path }}"
+      destination:
+        # prod vive en el spoke (laboratorio 6); dev y qa, en el hub.
+        name: '{{ if eq .path.basename "prod" }}spoke{{ else }}in-cluster{{ end }}'
+        namespace: catalogo-{{ .path.basename }}
+      ignoreDifferences: # las réplicas del frontend las decide el HPA (laboratorio 4)
+        - group: apps
+          kind: Deployment
+          name: catalogo-frontend
+          jsonPointers:
+            - /spec/replicas
+      syncPolicy:
+        # Sin "automated": con RollingSync quien sincroniza es el ApplicationSet, paso a paso.
+        syncOptions:
+          - RespectIgnoreDifferences=true
+          - PruneLast=true
